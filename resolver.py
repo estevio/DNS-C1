@@ -1,6 +1,6 @@
 import socket
 import dnslib
-from dnslib import DNSRecord, QTYPE
+from dnslib import DNSRecord, QTYPE, RR, A
 
 # test 2
 # dig -p8000 @IP_VM example.com
@@ -35,7 +35,7 @@ def parse_dns_msg(msg):
 
     d = DNSRecord.parse(msg)
     msg_dict = {
-        "qname": d.q.qname,
+        "qname": str(d.q.qname),
         "ancount": len(d.rr),
         "nscount": len(d.auth),
         "arcount": len(d.ar),
@@ -66,6 +66,11 @@ def resolver_c(msg, response):
             if add.rtype == QTYPE.A:
                 if debug:
                     pdebug(msg, str(add.rname), str(add.rdata))
+                cach = consultar_en_cache(msg)
+                if cach:
+                    if(debug):
+                        print("Dominio en caché")
+                    return cach
                 return resolver(msg, str(add.rdata))
     for r in response["authority"]:
         if r.rtype == QTYPE.NS:
@@ -73,10 +78,18 @@ def resolver_c(msg, response):
             q = DNSRecord.question(str(ns)).pack()
             if debug:
                 pdebug(q, ".")
-            ip_ns = resolver(q)
-            if debug:
-                pdebug(msg, str(r.rname), ip_ns)
-            return resolver(msg, ip_ns)
+            ip_ns = parse_dns_msg(resolver(q))
+            for i in ip_ns["answer"]:
+                if i.rtype == QTYPE.A:
+                    ip_ns = str(i.rdata)
+                    if debug:
+                        pdebug(msg, str(r.rname), ip_ns)
+                    cach = consultar_en_cache(msg)
+                    if cach:
+                        if(debug):
+                            print("Dominio en caché")
+                        return cach
+                    return resolver(msg, ip_ns)
 
 
 def resolver(mensaje_consulta: bytes, ip_addr="198.41.0.4"):
@@ -84,13 +97,13 @@ def resolver(mensaje_consulta: bytes, ip_addr="198.41.0.4"):
     data = resolver_a(mensaje_consulta, ip_addr)
     response = parse_dns_msg(data)
     # PARTE B
-    if (response["ancount"]>0 and response["answer"][0].rtype == QTYPE.A):
+    if (response["ancount"] > 0 and response["answer"][0].rtype == QTYPE.A):
         return data
     elif (response["nscount"]>0):
         return resolver_c(mensaje_consulta, response)
     else:
         if debug:
-            print("consulta inmanejable\n")
+            print(f"consulta inmanejable:\n{parse_dns_msg(mensaje_consulta)}")
 
 def pdebug(msg, ns, ip_ns="198.41.0.4"):
     data_consulta = parse_dns_msg(msg)
@@ -103,7 +116,10 @@ def consultar_en_cache(msg):
     if len(cache) > 0:
         for c in cache:
             if c[0] == dominio:
-                return c[1]
+                print(f"c1type = {type(c[1])}")
+                res = DNSRecord.parse(msg).reply()
+                res.add_answer(RR(rname=dominio, rtype=QTYPE.A, rdata=A(c[1])))
+                return res.pack()
     
 
 def actualizar_cache(dominio):
@@ -119,17 +135,17 @@ def actualizar_cache(dominio):
     # verificamos que el top 3 este en el cache
     if len(cache) < 3:
         q = DNSRecord.question(dominio).pack()
-        ip_new = resolver(q)
+        ip_new = str(parse_dns_msg(resolver(q))["answer"][0].rdata)
         cache.append((dominio, ip_new))
     else:
         cache_set = set([d[0] for d in cache])
-        dif_cache = cache_set - top3
+        dif_cache = (cache_set - top3)
         # si no, tomamos el distinto y reemplazamos
         if dif_cache:
             dif_top3 = (top3 - cache_set).pop()
             cache = [t for t in cache if t[0] != dif_cache]
             q = DNSRecord.question(dif_top3).pack()
-            ip_new = resolver(q)
+            ip_new = str(parse_dns_msg(resolver(q))["answer"].rdata)
             cache.append((dif_top3, ip_new))
     
 if __name__ == "__main__":
@@ -141,6 +157,7 @@ if __name__ == "__main__":
         print("while")
         msg, client = sock.recvfrom(buff_size)
         cach = consultar_en_cache(msg)
+        print(f"cach:{cach}")
         if cach:
             if(debug):
                 print("Dominio en caché")
@@ -152,6 +169,4 @@ if __name__ == "__main__":
             res = resolver(msg)
             if res:
                 sock.sendto(res, client)
-        data_consulta = parse_dns_msg(msg)
-        dominio = data_consulta["qname"]
-        actualizar_cache(dominio)
+        actualizar_cache(parse_dns_msg(msg)["qname"])
