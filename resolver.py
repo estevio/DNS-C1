@@ -9,7 +9,7 @@ from dnslib import DNSRecord, QTYPE, RR, A
 # Variables
 IP_VM = "10.0.2.15" # magda
 # IP_VM = "192.168.1.18" # matias
-buff_size = 4096
+buff_size = 10000
 debug = True
 
 # arreglo a lo más 3 tuplas (dominio, ip)
@@ -96,14 +96,18 @@ def resolver(mensaje_consulta: bytes, ip_addr="198.41.0.4"):
     """"""
     data = resolver_a(mensaje_consulta, ip_addr)
     response = parse_dns_msg(data)
+    #query_limpia = DNSRecord.question(response["qname"]).pack()
+    #data_limpia = resolver_a(query_limpia, ip_addr)
+    #response_limpia = parse_dns_msg(data_limpia)
     # PARTE B
-    if (response["ancount"] > 0 and response["answer"][0].rtype == QTYPE.A):
+    if (response["ancount"] > 0 and any(r.rtype == QTYPE.A for r in response["answer"])):
         return data
-    elif (response["nscount"]>0):
+    if (response["nscount"]>0):
         return resolver_c(mensaje_consulta, response)
     else:
         if debug:
-            print(f"consulta inmanejable:\n{parse_dns_msg(mensaje_consulta)}")
+            print("respuesta inmanejable\n")
+            debug_dns_response(data)
 
 def pdebug(msg, ns, ip_ns="198.41.0.4"):
     data_consulta = parse_dns_msg(msg)
@@ -116,11 +120,10 @@ def consultar_en_cache(msg):
     if len(cache) > 0:
         for c in cache:
             if c[0] == dominio:
-                print(f"c1type = {type(c[1])}")
+                print(c[1])
                 res = DNSRecord.parse(msg).reply()
                 res.add_answer(RR(rname=dominio, rtype=QTYPE.A, rdata=A(c[1])))
-                return res.pack()
-    
+                return res.pack()    
 
 def actualizar_cache(dominio):
     global cache
@@ -135,7 +138,11 @@ def actualizar_cache(dominio):
     # verificamos que el top 3 este en el cache
     if len(cache) < 3:
         q = DNSRecord.question(dominio).pack()
-        ip_new = str(parse_dns_msg(resolver(q))["answer"][0].rdata)
+        resp = parse_dns_msg(resolver(q))
+        for r in resp["answer"]:
+            if r.rtype == QTYPE.A:
+                ip_new = str(r.rdata)
+        print(ip_new)
         cache.append((dominio, ip_new))
     else:
         cache_set = set([d[0] for d in cache])
@@ -144,8 +151,8 @@ def actualizar_cache(dominio):
         if dif_cache:
             dif_top3 = (top3 - cache_set).pop()
             cache = [t for t in cache if t[0] != dif_cache]
-            q = DNSRecord.question(dif_top3).pack()
-            ip_new = str(parse_dns_msg(resolver(q))["answer"].rdata)
+            ip_new = str(parse_dns_msg(resolver(q))["answer"][0].rdata)
+            #print(ip_new)
             cache.append((dif_top3, ip_new))
     
 if __name__ == "__main__":
